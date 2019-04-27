@@ -1,4 +1,4 @@
-Try it [online.](https://lukq.github.io/mz-retro-basic/mzbasic.htm)
+﻿Try it [online.](https://lukq.github.io/mz-retro-basic/mzbasic.htm)
 
 A reimplementation of a BASIC language for the browser. It is an old-style BASIC
 with line numbers and command-line input interface. The syntax is based on the
@@ -19,5 +19,6 @@ Data types:
 - strings have a maximum length of 255 characters
 
 Special input:
-- \bar -Graph+Q character, \div -Graph+x character, \pi -Shift+0 character
+- Use \bar to enter Graph+Q character, \div -Graph+x character,
+  \pi -Shift+0 character
 - Pause key breaks out of INPUT
