@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<title>MZ Basic</title>
+<style>pre{font:14px/16px Courier New,monospace}
+</style>
+
+<textarea id=ldtxt style=display:none;height:348px;margin:0 cols=79>
+</textarea>
+<span id=lds style=display:none;height:27px><br>
+<button id=ldb style=margin-top:1px onclick=onloadprg()>Load</button>
+</span>
+<pre id=outp style='height:380px;overflow-y:scroll;margin:0'
+ ondragover="return!event.dataTransfer.types.includes('text/plain')"
+ ondrop="drop(event.dataTransfer.getData('text'))">
+   MZ retro BASIC
+
+Ready
+</pre>
+<form action="about:">
+  <input id=line size=80 style=font-family:Consolas;margin:1px 0
+   onkeydown=key(event.keyCode,this)
+  ><button id=send onclick='event.preventDefault(),online(line)'>></button>
+</form>
+<span id=tm></span>
+
+<script>
+/*
+MZ retro BASIC, version 1.0
+by Lukas Petru, April 2019
+
+Open source under the MIT License (Expat)
+
+A reimplementation of a BASIC language for the browser. It is an old-style BASIC
+with line numbers and command-line input interface. The syntax is based on the
+version of BASIC shipped with Sharp MZ-800 computers.
+
+Supported commands:
+ AUTO AND CONT CLS CLR DELETE DATA DEF DIM EDIT ELSE END FOR FN GOTO GOSUB INPUT
+ IF LIST LET LOAD MOD NEXT NEW NOT ON OR POKE PRINT RUN RETURN READ REM RENUM
+ RESTORE STOP STEP TAB THEN TO TRON TROFF USING XOR
+
+Functions:
+ ABS ASC ATN CHR$ COS EXP FRAC HEX$ INT LEFT$ LEN LN LOG MID$ PAI PEEK RAD
+ RIGHT$ RND SGN SIN SPC SPACE$ SQR STR$ TAN VAL
+
+Data types:
+- numbers are stored in double-precision floating point format
+- boolean operations process 16-bit integers
+- strings have a maximum length of 255 characters
+
+Special input:
+ \bar -Graph+Q character, \div -Graph+x character, \pi -Shift+0 character
+ Pause key breaks out of INPUT
+
+*/
+
+// Fix for 1Z-016, FN
+// 1IFPE.($8E2E)=$63PO.$8E2E,$66
+
+// (Apr2019) MS Edge sometimes rounds the last digit wrongly (e.g.
+//  1.011E-6 to 1.010E-6), hopefully they fix it at some point.
+
+pstr=n=>{
+ var s,a=Math.abs(n)
+ if(a>=1e8)
+   s=(s=a.toExponential(),s.length>11?a.toExponential(7):s).toUpperCase()
+ else if(a>=1-5e-9){
+   if((s=a+'').length>9){
+    s=a.toPrecision(8)
+    if(s.length>8){
+     for(i=j=s.length-1;s[i]=='0';)i--
+     s[i]=='.'?i--:0
+     i<j?s=s.slice(0,++i):0
+   }}
+ }else if(a>=1e-6-5e-15)
+   if((s=a+'').length>10){
+    for(s=a.toPrecision(8),i=s.length-1;s[i]=='0';)i--
+    s=++i<11?s.slice(1,i):a.toExponential(7+i-s.length).toUpperCase()
+   }else s=s.slice(1)
+ else if(a>1e-7-5e-16){
+   for(s=a.toPrecision(8),i=s.length-4;s[i]=='0';)i--
+   s=i<3?a.toFixed(6+i).slice(1):a.toPrecision(i).toUpperCase()
+ }else if(a>=1e-8){
+   for(s=a.toPrecision(8),i=s.length-4;s[i]=='0';)i--
+   s=i<2?a.toFixed(8).slice(1):a.toPrecision(i).toUpperCase()
+ }else
+   s=((s=a+'').length<13?s:a.toExponential(7)).toUpperCase()
+ return (n<0?'-':' ')+s
+}
+curx=_=>outtxt.length-1-outtxt.lastIndexOf('\n')
+out=e=>{
+ e=typeof e=='string'?
+  e.replace(/[\0-\cL\cN-\x1b]/g,x=>'\x03\x1b'.includes(x)?'\r':'')
+  .replace(/\r/g,'\n'):
+  pstr(e)
+ outtxt+=e
+}
+outcr=c=>{c?outtxt+='\n':0}
+outln0=s=>{outtxt+=(curx()?'\n'+s:s)+'\n'}
+outlnent=s=>{out(s+'\r')}
+
+keyword="^(?:\
+AUTO|AND|CONT|CHAIN|CLS|DELETE|DATA|DEF|DIM|EDIT|ELSE|END|FOR|GOTO|GOSUB|HSET|\
+INPUT|IF|LIST|LET|LOAD|MERGE|MOD|NEXT|NEW|NOISE|NOT|ON|OR|PRINT|POKE|RUN|\
+RETURN|READ|REM|RENUM|RESTORE|RESUME|STOP|STEP|SPC|TRON|TAB|THEN|TO|TROFF|USR|\
+USING|VERIFY|XOPEN|XOR|"
+keyword2="ABS|ASC|ATN|CHR$|CLR|COS|EXP|FN|FRAC|HEX$|INT|LEFT$|LEN|LN|LOG|MID$|\
+PAI|PEEK|RAD|RIGHT$|RND|SGN|SIN|SPACE$|SQR|STR$|TAN|VAL"
+
+keywordr=RegExp((keyword+keyword2).replace(/\$/g,' *\\$')
+ +"|[AC-IL-PR-VX](?:[ABDEG-ILN-UX][AC-IKLN-PR-UX]*)? *\\.)")
+
+findKeyword=(s,i)=>{
+ var k,m,r
+ if(k=s.slice(i).match(keywordr))
+  r=k[0].slice(-1)!='.'?k[0].replace(/ +/g,''):
+  (m=(keyword+keyword2).match(RegExp(
+   `\\b${k[0].slice(0,-1).replace(/ +/,'\\$')}[\\w$]*`)))
+  &&m[0]
+ return !r?0:['AND','MOD','NOT','OR','XOR'].includes(r)&&
+  (/[A-Z_\d]/.test(s[i-1]||0)||m)?0:[r,keyword2.includes(r),k[0]]
+}
+
+pich='\u03C0'
+subschars=s=>s.replace(/\\(?:bar|div|pi|\\)/g,x=>
+ ({b:'\u23bd',d:'\xf7',p:pich})[x[1]]||x[1])
+escchars=s=>s.replace(/[\\\xf7\u03C0\u23bd]/g,x=>
+ '\\'+(x=='\\'?'\\':x=='\xf7'?'div':x=='\u03C0'?'pi':'bar'))
+
+lnoCmds='AUTO DELETE EDIT ELSE GOTO GOSUB LIST RENUM RESTORE RETURN RUN THEN'
+ .split(' ')
+
+tokens=(s,ren,rln)=>{
+  var a,c,i,j,k,l,m,n,o,q,r=[],s,t
+  for(i=s[0]==' '|0;i<s.length;){
+   j=i,l=''
+
+   if(s[i]>='A'&&s[i]<='Z'){
+    // keyword or variable
+    for(m=0;/[A-Z_\d]/.test(s[i])&&!(m=findKeyword(s,i));)i++
+    s[i]=='$'?i++:0,s[i]=='('?i++:0
+    if(i>j) r.push(s.slice(j,i))
+    if(m){
+     m[1]?r.push('|'):0
+     l='|'+m[0],r.push(l)
+     i+=m[2].length
+    }
+    if(m&&lnoCmds.includes(m[0])){
+     m=s.slice(i).match(/^(?:[ \d,-.]?(?:"[^"]*")?)*(?:".*)?/)[0]
+     if(m.length){
+      i+=m.length
+      m=m.match(/(?:[ ,-.]|[ \d]+|"[^"]*"?)/g)
+      for(k=0;k<m.length;k++)
+       if(/\d/.test(m[k])){
+        q=+(m[k].replace(/ /g,''))
+        if(q>65535)throw 'Over flow'
+        ren&&ren[q]==null?outln0(`Un def. line error ${q} in `+rln):0
+        ren&&ren[q]?q=ren[q]:0
+        r.push(q)
+       }else r.push(m[k]=='-'?'|-':m[k])
+     }
+    }
+   }
+
+   else if(s[i]>='0'&&s[i]<='9'||s[i]=='.'){
+    // float
+    m=s.slice(i).match(/^[0 ]*((?:\d[\d ]*\.?|\.)[\d ]*)(E[+-]?\d+|(E[+-])|)/)
+    q=m[1].replace(/ /g,'')+m[2]
+    r.push('~~'+q),i+=m[0].trim().length
+    if(!isFinite(+('0'+q+(m[3]?0:''))))throw 'Over flow'
+   }
+   else if(s[i]=='$'){
+    // hex
+    for(;/[\dA-F]/.test(s[++i]););
+    if(+('0x'+s.slice(j+1,i))>65535)throw 'Over flow'
+    r.push(s.slice(j,i))
+   }
+   else if(s[i]>='<'&&s[i]<='>'){
+    // relational operator
+    m=s.slice(i).match(/=\s*[<>]?|<\s*[=>]?|>\s*[=<]?/)[0]
+    r.push(m.replace(/ +/,'')),i+=m.length
+   }else if(s[i]=='"'){
+    for(i++;s[i]&&s[i]!='"';)i++
+    if(i-j>256)throw 'String length'
+    s[i]=='"'?i++:0,r.push(s.slice(j,i))
+   }else if(s[i]==' ')r.push(' '),i++
+   else if(s[i]=='?')r.push('|PRINT'),i++
+   else if(s[i]==pich||s[i]=='\xf7'||s[i]=='\u23bd')r.push(s[i++])
+   else if(!/[\0-_]/.test(s[i]))throw 'Syntax'
+   else if(/[!-_]/.test(s[i])) r.push(l=s.slice(i,++i))
+   else i++
+   if(s[i]&&(l=="'"||l=="|REM"||l=="|DATA")){
+    for(j=i,q=0;s[i]&&(s[i]!=':'||q);)s[i++]=='"'?q^=1:0
+    i>j&&r.push(s.slice(j,i))
+   }
+  }
+  t=r.map(
+   (x,i)=>typeof x=='number'?(x+'').toUpperCase():
+    r[i-1]==='|DATA'||r[i-1]==='|REM'?x:
+    x.replace(/^[|~]+/,'')).join('').replace(/\\/g,'\\\\')
+  c=[]
+  for(a=r.filter(x=>x!==' '),i=0;i<a.length;i++){
+   x=a[i]
+   if(x===':'&&a[i+1]==="|REM");
+   else if(x!==':'&& (a[i-1]==="'"||a[i-1]==='|REM'||x==="'"||
+    x==='|REM'&&(!i||a[i-1]===':'||a[i-1]==='|THEN'||
+    a[i-1]==='|ELSE')));
+   else if(x!==':'&&a[i-1]==='|DATA'){
+    for(j=0,x=(x+(a[i+1]||'')).trim();j<x.length;){
+     m=x.slice(j).match(/(("[^"]*)"? *|[^,:]*),? */)
+     s=m[2]||m[1]
+     c.push(s),j+=m[0].length
+     if(s.length-(s[0]=='"')>255)throw 'String length'
+     if(x[j]==':')break
+    }
+   }else if(typeof x=='string'&&x.length>1&&x[x.length-1]=='(')
+    c.push(x.slice(0,-1),'(')
+   else if(x==='('&&isvar(a[i-1])&&a[i-1][a[i-1].length-1]!='(')
+    c.push(' ','(')
+   else if(typeof x=='string'&&/[<=>]./.test(x))
+    c.push(x.split('').sort().join(''))
+   else if(typeof x=='string'&&x.startsWith('~~'))
+    c.push(+('0'+x.slice(2)+(/[+-]$/.test(x)?0:'')))
+   else if(x==='|ELSE')c.push(':',x)
+   else c.push(x===pich?'pi':x==='\xf7'?'|div':x)
+  }
+  return[c,t]
+}
+
+outtxt=outp.textContent
+
+// Program, mapping of line number ->[tokens, text]
+program=[]
+// Pointer to currently executed line
+pc=0
+// Currently executed line number
+ln=0
+// variables
+v={}
+
+chFinite=a=>{if(!isFinite(a))throw 'Over flow'}
+cvfloat=s=>{
+ var r,m=s.match(
+  /^([ +-]*)(?:\$([\dA-F]*)|([ \d]*\.?[ \d]*)(?:(E[+-]?\d+)|E[+-])?) */)
+ if(m[2]!=null){
+  if(r='0x'+m[2]|0,r>65535)throw 'Over flow'
+ }else{
+  r=+(!m[3]||m[3]=='.'?0:m[3].replace(/ /g,'')+(m[4]||''))
+  chFinite(r)
+ }
+ return m[1].replace(/-/g,_=>r=-r),[r,m[0].length==s.length]
+}
+fromasc=s=>{if((s=+s.replace(/ /g,''))<65536)return s;throw 'Over flow'}
+isvar=s=>{
+ var c;
+ return typeof s=='string'&&(c=s.charCodeAt(0))>=65&&c<=90
+}
+chtype=(t,o)=>{if(t^typeof o=='string')throw 'Type mismatch'}
+byte=n=>{
+ chtype(0,n)
+ if(n>=65536||n<=-65536)throw 'Over flow'
+ n=n&65535
+ if(n<256)return n; throw 'Illegal data'
+}
+bytei=n=>{
+ if(n<256)return n; throw 'Illegal data'
+}
+idx=n=>{
+ chtype(0,n)
+ if(n>=65536||n<=-65536)throw 'Over flow'
+ n=n&65535
+ if(n<32768)return n; throw 'Illegal data'
+}
+int=n=>{
+ chtype(0,n)
+ if(n>=65536||n<=-65536)throw 'Over flow'
+ return n&65535
+}
+
+// 1-Syntax
+// 2-Over flow
+// 3-Illegal data
+// 4-Type mismatch
+// 5-String length
+// 6-Memory capacity
+err=''
+
+fn={'|INT':Math.floor,'|ABS':Math.abs,'|SIN':Math.sin,'|COS':Math.cos,
+'|TAN':Math.tan,'|LN':x=>x<=0?err='Illegal data':Math.log(x),
+'|EXP':x=>(chFinite(x=Math.exp(x)),x),
+'|SQR':x=>(x<0?err='Illegal data':Math.sqrt(x)),'|RND':Math.random,
+'|PEEK':x=>mm[int(x)]|0,'|ATN':Math.atan,'|SGN':Math.sign,
+'|LOG':x=>x<=0?err='Illegal data':Math.log10(x),'|FRAC':x=>x-Math.trunc(x),
+'|PAI':x=>(chFinite(x=x*Math.PI),x),'|RAD':x=>Math.PI/180*x,
+'|STR$':x=>(x=pstr(x))[0]==' '?x.slice(1):x,
+'|ASC':x=>x.charCodeAt(0)|0,'|HEX$':x=>int(x).toString(16).toUpperCase(),
+'|LEN':x=>x.length,'|SPC':x=>' '.repeat(byte(x)),
+'|SPACE$':x=>' '.repeat(byte(x)),'|VAL':x=>cvfloat(x)[0]}
+ft={'|ASC':1,'|LEN':1,'|VAL':1}
+
+ch=a=>{if(!a)throw 'Syntax'}
+isend=(l,i)=>i==l.length||l[i]===':'
+x=0
+
+factor=(l,i)=>{
+ var c,e,f,j,k,ofndef,r,s,u
+ r=s=l[i++]
+ if(typeof r=='string'){
+  if((c=r.charCodeAt(0))>=65&&c<=90){
+   if(fndef){
+    ch(fndef[0]==='(')
+    j=1
+    do{
+     ch(isvar(u=fndef[j++]))
+     if(u==s){
+      ch(fntxt[0]==='(')
+      j=j-1>>1
+      for(k=1;j;k++)
+       fntxt[k]===','?j--:ch(!isend(fntxt,k)&&fntxt[k]!==')')
+      ofndef=fndef,fndef=null
+      r=expr(fntxt,k)[0]
+      fndef=ofndef
+      return [r,i]
+     }
+    }while(fndef[j++]===',')
+    ch(fndef[j-1]===')')
+   }
+   if(l[i]==='(')e=getarrvar(r,l,++i),r=e[0],i=e[1]
+   null!=(r=v[r])?0:r=(s[s.length-1]=='$'?'':0)
+  }
+  else if(r[0]=='"')r=r.slice(1,r[r.length-1]=='"'?-1:r.length)
+  else if(r[0]=='$'&&r!='$')r=(+('0x'+r.slice(1))+32768&65535)-32768
+  else if(r=='('){
+    e=expr(l,i),i=e[1],r=e[0]
+    ch(l[i++]===')')
+  }else if(r=='|'&&(f=fn[r=l[i++]])){
+   if(l[i]==='('&&i++){
+    e=expr(l,i),i=e[1]
+    ch(l[i++]===')')
+   }else e=[0,0],ch(r=='|RND')
+   chtype(ft[r],e[0])
+   r=f(e[0]);if(err)throw err
+  }else if(r=='|MID$'||r=='|LEFT$'||r=='|RIGHT$'){
+   ch(l[i++]==='(')
+   e=expr(l,i)
+   s=e[0],i=e[1],ch(l[i++]===',')
+   chtype(1,s)
+   e=expr(l,i)
+   j=int(e[0]),i=e[1]
+   if(r!='|MID$') ch(l[i++]===')')
+   j=bytei(j)
+   if(r=='|MID$'){
+     if(!j)throw 'Illegal data'
+     if(l[i++]===')')k=255
+     else{
+      ch(l[i-1]===',')
+      e=expr(l,i)
+      k=int(e[0]),i=e[1]
+      ch(l[i++]===')')
+      k=bytei(k)
+     }
+     r=s.slice(j-1,j-1+k)
+   }else if(r=='|LEFT$') r=s.slice(0,j)
+   else r=s.slice(s.length-j)
+  }else if(r=='|CHR$'){
+   r='',ch(l[i++]==='(')
+   do{
+    e=expr(l,i)
+    r+=String.fromCharCode(byte(e[0])),i=e[1]
+   }while(l[i++]===',')
+   ch(l[i-1]===')')
+   if(r.length>255)throw 'String length'
+  }else if(r=='pi')r=Math.PI
+  else if(r=='|FN'){
+   ch(isvar(s=l[i++]))
+   if((e=v['_'+s])==null)throw 'Un def. function'
+   for(j=0;j<e.length&&e[j]!=='=';)j++
+   ch(j<e.length)
+   fntxt=l.slice(l[i]===' '?++i:i)
+   ofndef=fndef
+   j>0?fndef=e:fndef=null
+   r=expr(e,j+1)[0]
+   fndef=ofndef
+   chtype(s[s.length-1]=='$',r)
+   k=l[i]==='('&&i++?1:0
+   for(;k;i++)
+    ch(!isend(l,i)),
+    typeof l[i]=='string'&&(l[i]==')'?k--:l[i]=='('?k++:0)
+  }else ch(0)
+  return [r,i]
+ }
+ ch(r!=null);return [r,i]
+}
+
+exprz=(l,i)=>{
+ var e,n,neg=0,op,r,t;
+ if(t=(typeof l[i]=='string')){
+  for(;t&&l[i]=='+';i++)t=typeof l[i]=='string'
+  if(t&&l[i]=='-')neg=1,i++
+ }
+ e=factor(l,i),r=e[0],i=e[1]
+ while(typeof(op=l[i])=='string'&&op=='^'){
+  for(;l[++i]==='+';);
+  if(n=l[i]==='-')i++
+  e=factor(l,i)
+  chtype(0,r),chtype(0,e[0])
+  r=r**(n?-e[0]:e[0]),i=e[1]
+  if(r!=r)throw 'Illegal data'
+  chFinite(r)
+ }
+ if(neg){
+  chtype(0,r),r=-r
+ }
+ return [r,i]
+}
+
+expr0=(l,i)=>{
+ var a,e,r,op
+ e=exprz(l,i),r=e[0],i=e[1]
+ while(typeof(op=l[i])=='string'&&(op=='*'||op=='/')){
+  a=r,i++
+  e=exprz(l,i),r=e[0],i=e[1]
+  chtype(0,a),chtype(0,r)
+  r=op=='*'?a*r:a/r
+  chFinite(r)
+ }
+ return [r,i]
+}
+expr0i=(l,i,r)=>{
+ var a,e,r,op
+ while(typeof(op=l[i])=='string'&&(op=='*'||op=='/')){
+  a=r,i++
+  e=exprz(l,i),r=e[0],i=e[1]
+  chtype(0,a),chtype(0,r)
+  r=op=='*'?a*r:a/r
+  chFinite(r)
+ }
+ return [r,i]
+}
+
+expr1=(l,i)=>{
+ var a,e,r,op
+ 
+ e=exprz(l,i),r=e[0],i=e[1]
+ if(typeof(op=l[i])=='string'&&(op=='*'||op=='/'))
+  e=expr0i(l,i,r),r=e[0],i=e[1]
+ 
+ while(typeof(op=l[i])=='string'&&(op=='|MOD'||op=='|div')){
+  a=r,i++
+  e=expr0(l,i),r=e[0],i=e[1]
+  chtype(0,a),chtype(0,r)
+  if(op=='|MOD')r=Math.trunc(a)%Math.trunc(r)
+  else r=Math.trunc(Math.trunc(a)/Math.trunc(r))
+  chFinite(r)
+ }
+ return [r,i]
+}
+
+expr1i=(r,l,i)=>{
+ var a,e,r,op
+ while(typeof(op=l[i])=='string'&&(op=='|MOD'||op=='|div')){
+  a=r,i++
+  e=expr0(l,i),r=e[0],i=e[1]
+  chtype(0,a),chtype(0,r)
+  if(op=='|MOD')r=Math.trunc(a)%Math.trunc(r)
+  else r=Math.trunc(Math.trunc(a)/Math.trunc(r))
+  chFinite(r)
+ }
+ return [r,i]
+}
+
+expr2=(l,i)=>{
+ var a,c,e,op,r
+
+ if(typeof(a=l[i])!='string'||(c=a.charCodeAt(0))<65||c>90
+  ||typeof(op=l[i+1])=='string'&&
+  (op=='*'||op=='/'||op=='('||op=='^')||fndef||v[a]==null)
+  e=expr1(l,i),r=e[0],i=e[1]
+ else if(op=='|MOD'||op=='|div')e=expr1i(v[a],l,++i),r=e[0],i=e[1]
+ else r=v[a],i++
+ 
+ while(typeof(op=l[i])=='string'&&(op=='+'||op=='-')){
+  a=r,i++
+  e=expr1(l,i),r=e[0],i=e[1]
+  if(op=='+')
+   if(typeof a=='number'){
+    chtype(0,r) 
+    chFinite(r=a+r)
+   }else{
+    chtype(1,r);r=a+r
+    if(r.length>255)throw 'String length'
+   }
+  else{
+   chtype(0,a),chtype(0,r)
+   chFinite(r=a-r)
+  }
+ }
+ return [r,i]
+}
+
+expr3=(l,i)=>{
+ var a,e,r,op
+ e=expr2(l,i),r=e[0],i=e[1]
+ while(typeof(op=l[i])=='string'&&(op=='<'||op=='='||op=='>'
+  ||op.length==2&&(op=='<='||op=='=>'||op=='<>'))){
+  a=r,i++
+  e=expr2(l,i),r=e[0],i=e[1]
+  chtype(typeof a=='string',r)
+  r=(op=='<'?a<r:op=='='?a==r:op=='>'?a>r:
+   op=='<='?a<=r:op=='<>'?a!=r:a>=r)?-1:0
+ }
+ return [r,i]
+}
+
+expr5=(l,i)=>{
+ var a,e,r,op,not=typeof(op=l[i])=='string'&&op=='|NOT'&&++i
+ e=expr3(l,i),r=e[0],i=e[1]
+ if(not)r=(int(r)^32767)-32768
+ while(typeof(op=l[i])=='string'&&op=='|AND'){
+  a=r,i++
+  not=typeof(op=l[i])=='string'&&op=='|NOT'&&++i
+  e=expr3(l,i),r=e[0],i=e[1]
+  if(not)r=(int(r)^32767)-32768
+  chtype(0,a),chtype(0,r)
+  a=int(a),r=int(r)
+  r=(((a&r)+32768)&65535)-32768
+ }
+ return [r,i]
+}
+
+expr6=(l,i)=>{
+ var a,e,r,op
+ e=expr5(l,i),r=e[0],i=e[1]
+ while(typeof(op=l[i])=='string'&&op=='|OR'){
+  a=r,i++
+  e=expr5(l,i),r=e[0],i=e[1]
+  chtype(0,a),chtype(0,r)
+  a=int(a),r=int(r)
+  r=(((a|r)+32768)&65535)-32768
+ }
+ return [r,i]
+}
+
+expr=(l,i)=>{
+ var a,e,r,op
+ e=expr6(l,i),r=e[0],i=e[1]
+ while(typeof(op=l[i])=='string')
+  if(op=='|XOR'){
+   a=r,i++
+   e=expr6(l,i),r=e[0],i=e[1]
+   chtype(0,a),chtype(0,r)
+   a=int(a),r=int(r)
+   r=(((a^r)+32768)&65535)-32768
+  }else{ch(op!='|');break}
+
+ return [r,i]
+}
+
+charrvar=(s,b)=>{
+ ch(typeof s=='string'&&s[0]>='A'&&s[0]<='Z'&&b==='(')
+}
+charrdim=(n,s)=>{
+ var d=v[n]
+ if(s.length!=d.length)throw 'Array def.'
+ if(s.some((x,i)=>x>d[i]))throw 'Illegal data'
+}
+getarridx=(l,i)=>{
+ var d=[],e
+ do{
+  if(d.length==4)throw 'Illegal data'
+  e=expr(l,i)
+  d.push(idx(e[0])),i=e[1]
+ }while(l[i++]===',')
+ ch(l[i-1]===')')
+ return[d,i]
+}
+getarrvar=(n,l,i)=>{
+ // array variable
+ var e=getarridx(l,i)
+ if(!v[n+='('])throw 'Illegal data'
+ charrdim(n,e[0])
+ return [n+e[0],e[1]]
+}
+pad=(s,t)=>{var p;return s+' '.repeat((p=t.length-s.length)>0?p:0)}
+leftPad=(s,t)=>{var p;return' '.repeat((p=t.length-s.length)>0?p:0)+s}
+getsted=(l,i)=>{
+ var n
+ return isend(l,i)||l[i]===','?[0,65535,i]:
+ [n=(typeof l[i]=='number'?l[i++]:l[i]==='.'?(i++,ed):(ch(l[i]==='|-'),0)),
+  l[i]!=='|-'?n:typeof l[++i]=='number'?l[i++]:l[i]==='.'?(i++,ed):
+  (ch(isend(l,i)||l[i]===','),65535),i]
+}
+lines=goto=null
+ipc=null
+cont=''
+sp=[]
+ed=10
+ast=0
+dal=dai=trf=0
+mm=[]
+chend=(l,i)=>{if(i<l.length&&l[i]!==':')throw 'Syntax'}
+
+clrflg=_=>{dal=dai=0,cont=''}
+changeProgram=p=>{
+  program=p
+  lines=Object.keys(program),goto=[0],lines.map((x,i)=>goto[x]=i)
+}
+execCmd=(cmd,l,i)=>{
+  var e,f=0,j,n,p,q=0,rln,s,st,t,to,u,ui,w
+
+  on:for(;;){
+   if(isvar(cmd)||cmd==='|FOR'&&(f=1)||cmd==='|LET'&&(q=1)){
+    q||f?ch(isvar(l[i++])):0
+    n=l[i-1]
+    n.length>1?t=n[n.length-1]=='$':t=0
+    if(l[i]==='(')
+     e=getarrvar(n,l,++i),n=e[0],i=e[1]
+    ch(l[i++]==='=')
+    e=expr(l,i)
+    chtype(t,e[0])
+    v[n]=e[0],i=e[1]
+    if(f){
+     p=e[0],ch(l[i++]==='|TO')
+     e=expr(l,i)
+     if(to=e[0],i=e[1],st=1,l[i]==='|STEP'){
+      e=expr(l,++i)
+      st=e[0],i=e[1],chtype(0,st)
+     }
+     chtype(0,p),chtype(0,to)
+     for(j=sp.length-6;sp[j+5]==0;j-=6)
+      if(sp[j+1]==n){sp.length=j;break}
+     sp.push(n,st,to,pc,i+1,0)
+    }
+   }
+
+   else if(cmd==='|NEXT'){
+    q=!isend(l,i)
+    do{
+      if(sp[sp.length-1]!=0)throw 'NEXT'
+      if(q){
+       isvar(n=l[i])?0:(ch(l[i]===','),n='')
+       if(i++,n){
+        if(l[i]==='(')
+         e=getarrvar(n,l,++i),n=e[0],i=e[1]
+        for(j=sp.length;sp[j-1]==0;j-=6)
+         if(sp[j-6]==n){sp.length=j;break}
+        if(sp.length!=j)throw 'NEXT'
+       }
+      }
+      n=sp[sp.length-6],q=1
+      v[n]=(v[n]||0)+sp[sp.length-5]
+      if(sp[sp.length-5]<0?v[n]<sp[sp.length-4]:sp[sp.length-4]<v[n])
+       sp.length-=6
+      else if(pc==sp[sp.length-3])return [sp[sp.length-2]]
+      else return [i,'NEXT']
+    }while(l[i]===','&&i++)
+   }
+
+   else if(cmd==='|IF'){
+    e=expr(l,i),i=e[1]
+    if(e[0]){
+     if(l[i]==='|THEN'&&++i<l.length&&typeof l[i]=='number'){
+      if(cont='',(pc=goto[l[i]])==null)throw 'Un def. line'
+      i=l.length
+     }
+    }else{
+     for(q=1;i<l.length&&q;i++)
+      l[i]==='|ELSE'?q--:l[i]==='|IF'?q++:0
+     if(i<l.length&&typeof l[i]=='number'){
+      if(cont='',(pc=goto[l[i]])==null)throw 'Un def. line'
+      i=l.length
+     }
+    }
+    return [i]
+   }
+
+   else if(cmd==='|GOTO'||cmd==='|GOSUB'||cmd==='|RETURN'||cmd==='|RUN'){
+    if(cmd==='|GOSUB'){
+     for(j=i;j<l.length&&l[j++]!==':';);
+     sp.push(pc,j,2)
+     if(sp.length>8400)throw sp.length=0,'Memory capacity'
+    }else if(cmd==='|RETURN'){
+     for(j=sp.length;sp[j-1]==0;)j-=6
+     sp.length=j
+     if(sp[j-1]!=2)throw 'RETURN'
+     if(isend(l,i))return [i,'RETURN']
+     sp.length=j-3
+    }else if(cmd==='|RUN'){
+     if(isend(l,i))
+      return clrflg(),ast=0,ed=10,v={},sp=[],pc=0,[l.length]
+    }
+    ch(i<l.length&&typeof l[i]=='number')
+    if((pc=goto[l[i]])==null)throw 'Un def. line'
+    cont=''
+    i=l.length
+   }
+
+   else if(cmd==='|PRINT'){
+    if(l[i]==='['){
+     e=expr(l,++i)
+     byte(e[0]),i=e[1]+1
+     ch(l[i-1]===']')
+    }
+    for(q=1;;){
+     if(isend(l,i)) {outcr(q);break}
+     if(l[i]===';')i++,q=0
+     else if(l[i]===',')out(' '.repeat(10-curx()%10)),i++,q=0
+     else if(l[i]==='|TAB'){
+       ch(l[++i]==='(')
+       e=expr(l,i+1),i=e[1]
+       n=byte(e[0])
+       ch(l[i++]===')')
+       (n=n-curx())>0?out(' '.repeat(n)):0,q=1
+     }else if(l[i]==='|USING'){
+       e=expr(l,i+1),i=e[1]
+       chtype(1,e[0])
+       if((s=e[0])=='')throw 'Illegal data'
+       for(u=[],j=0;;){
+        p=s.slice(j).match(
+         /(.*?)(\u23bd.|!|& *&?|(?:\+|#|\*\*|\$\$)[#,]*\.?#*|\.#+)([+-]?(?:\^{4})?)/)
+        if(!p){u.push(s.slice(j));break}
+        /^[^\u23bd!&]/.test(p[2])&&p[3]&&(p[3][0]!='+'||p[2][0]!='+')?
+         p[2]+=p[3]:0
+        u.push(p[1],p[2]),j+=p[1].length+p[2].length
+       }
+       for(ui=0;ui<u.length;ui++)
+        if(u[ui].length==2&&u[ui][0]=='\u23bd')
+         u.splice(--ui,3,u[ui]+u[ui+1][1]+u[ui+2])
+       ui=0
+       for(;;){
+        if(isend(l,i)){q=1;break}
+        ch(l[i]===';'||l[i]===',')
+        if(isend(l,++i)){q=0;break}
+        e=expr(l,i),i=e[1]
+        if(u.length<2)throw 'Illegal data'
+        s=ui?'':u[ui++]
+        chtype(u[ui][0]=='&'||u[ui][0]=='!',e[0])
+        if(typeof e[0]=='string'){
+          if(u[ui][0]=='&'&&!/& *&/.test(u[ui]))throw 'Illegal data'
+          out(s+pad(e[0],u[ui]).slice(0,u[ui++].length)+u[ui++])
+        }else if(/\^/.test(u[ui]))
+          w=u[ui].match(/(\+?[^-+^]*)/)[0].length,
+          p=(e[0]<0?'':' ')+e[0].toExponential(w>3?w-3:0).toUpperCase(),
+          w==3?p=p.slice(0,2)+'.'+p.slice(2):0,
+          out(s +pad(p,u[ui++]) +u[ui++])
+        else
+          n=u[ui].match(/\.#*/),w=n?n[0].length:0,
+          p=e[0].toFixed(w?w-1:0).toUpperCase(),w!=1||p.includes('E')?0:p+='.',
+          out(s+leftPad(e[0]<0&&/^-0./.test(p)?'-'+p.slice(2):p,u[ui++])
+           +u[ui++])
+        ui%=u.length
+       }
+     }else if(l[i]===' ')i++;
+     else{
+       e=expr(l,i),i=e[1],out(e[0]),q=1
+     }
+    }
+   }
+
+   else if(cmd===':')return [i];
+   else if(cmd==='|AUTO'){
+    if(ln<65536)throw 'Instruction'
+    p=st=10
+    l[i]==='.'?(p=ed,i++):typeof(l[i])=='number'?p=l[i++]:
+     ch(isend(l,i)||l[i]===',')
+    l[i]===','?(e=expr(l,++i),i=e[1],st=int(e[0])):0
+    chend(l,i)
+    if(!st)throw 'Illegal data'
+    return ed=p,ast=st,[i,'AUTO']
+   }else if(cmd==='|'&&l[i]==='|CLR')i++,v={}
+   else if(cmd==='|CLS')chend(l,i),outtxt=''
+   else if(cmd==='|DATA')for(;!isend(l,i);)i++
+   else if(cmd==='|DEF'){
+    ch(l[i++]==='|FN')
+    ch(isvar(n=l[i++]))
+    if(v[n='_'+n]!=null)throw 'Array def.'
+    for(j=i;!isend(l,i);)i++
+    v[n]=l.slice(l[j]===' '?j+1:j,i)
+   }
+   else if(cmd==='|DELETE'){
+    ch(!isend(l,i)&&l[i]!==',')
+    e=getsted(l,i),st=e[0],to=e[1]
+    Object.keys(program).map(b=>b>=st&&b<=to?delete program[b]:0)
+    clrflg(),pc=65600,i=l.length
+   }
+   else if(cmd==='|DIM'){
+    do{
+     charrvar(n=l[i++],l[i++])
+     e=getarridx(l,i)
+     if(!v[n+='('])v[n]=e[0];else charrdim(n,e[0])
+     i=e[1]
+    }while(l[i]===','&&i++)
+   }else if(cmd==='|EDIT'){
+    isend(l,i)?0:ed=getsted(l,i)[0]
+    return pc=65600,[i,'EDIT']
+   }else if(cmd==='|ELSE')i=l.length
+   else if(cmd==='|END') pc=65600,cont='',i=l.length
+
+   else if(cmd==='|INPUT'){
+    j=i-1
+    typeof l[i]=='string'&&l[i][0]=='"'?
+     (p=l[i++].slice(1,-1),ch(l[i++]==';')):p='? '
+    inpvars=[]
+    out(p)
+    do{
+     ch(isvar(n=l[i++]))
+     t=n[n.length-1]=='$'
+     if(l[i]==='(')
+      e=getarrvar(n,l,++i),n=e[0],i=e[1]
+     inpvars.push(n,t)
+    }while(!isend(l,i)&&!ch(l[i++]===','))
+    return ipc=[pc-1,++i,j],pc=65600,[i,'INPUT']
+
+   }else if(cmd==='|LIST'){
+    l[i]===','?i++:0
+    e=getsted(l,i),st=e[0],to=e[1],i=e[2]
+    out(Object.keys(program).reduce((a,b)=>
+      a+(b>=st&&b<=to?b+` ${program[b][1]}\r`:''),''))
+
+   }else if(cmd==='|LOAD'){
+    if(!isend(l,i)&&l[i]!==',') expr(l,i)
+    if(ln<65536)throw 'Instruction'
+    clrflg(),ed=10,program={},lines=null,v={},cont=''
+    return pc=65600,[i,'LOAD']
+
+   }else if(cmd==='|NEW'){
+    clrflg(),ast=0,ed=10,program=[],lines=null,v={},pc=65600,i=l.length
+
+   }else if(cmd==='|ON'){
+    e=expr(l,i),i=e[1]
+    p=int(e[0])
+    i==l.length||ch(typeof l[i]=='string'&&
+     ['|GOTO','|GOSUB','|RESTORE','|RETURN','|RUN',':'].includes(cmd=l[i++]))
+    if(p&&p<256){
+     do{
+      if(!--p){ch(cmd!=':'),cmd=='|RUN'?i=l.length:0;continue on}
+      ch(typeof l[i++]=='number')
+     }while(l[i]===','&&i++)
+    }else
+     for(q=0;l[i]!=null&&(l[i]!==':'||q);)l[i++]==='"'?q=1-q:0
+
+   }else if(cmd==='|POKE'){
+    e=expr(l,i),i=e[1]
+    p=int(e[0])
+    ch(l[i]===',')
+    do{
+     e=expr(l,++i),i=e[1]
+     mm[p++&65535]=byte(e[0])
+    }while(l[i]===',')
+
+   }else if(cmd==='|READ'){
+    w=[]
+    do{
+     ch(isvar(n=l[i++]))
+     t=n[n.length-1]=='$'
+     if(l[i]==='(')
+      e=getarrvar(n,l,++i),n=e[0],i=e[1]
+     w.push(n,t)
+    }while(!isend(l,i)&&!ch(l[i++]===','))
+    for(j=0;j<w.length;j+=2){
+     if(u=program[lines[dal]][0],!dai||isend(u,dai)){
+      for(;;dai=0,dal++){
+       if(dal>=lines.length-2)throw 'READ'
+       for(u=program[lines[dal]][0];dai<u.length&&u[dai]!=='|DATA';)dai++;
+       if(u[dai++]==='|DATA')break;
+      }
+     }
+     isend(u,dai)?s='':(s=u[dai++])[0]=='"'?s=s.slice(1):0
+     if(w[j+1]) v[w[j]]=s
+     else{
+      e=cvfloat(s)
+      if(!e[1]||/^ *E/.test(s))throw 'Illegal data'
+      v[w[j]]=e[0]
+     }
+    }
+   }
+
+   else if(cmd==='|RENUM'){
+    if(ln<65536)throw 'Instruction'
+    p=0,w=st=10
+    isend(l,i)?0:l[i]===','?0:(e=expr(l,i),i=e[1],w=int(e[0]))
+    isend(l,i)?0:(ch(l[i++]===','),l[i]===',')?0:
+     (e=expr(l,i),i=e[1],p=int(e[0]))
+    isend(l,i)?0:(ch(l[i++]===','),e=expr(l,i),i=e[1],st=int(e[0]))
+    if(w<p)throw 'Illegal data'
+    e=Object.keys(program);
+    for(ren=[0],q=w-st,j=0;j<e.length-2;j++)ren[rln=e[j]]=(rln<p?rln:q+=st)
+    if(f=q>65535&&e.length-2<=6553){
+     for(ren=[0],q=j=0;j<e.length-2;j++)ren[e[j]]=q+=10
+    }
+    if(q<65536){
+     for(n=[],j=0;j<e.length-2;j++)
+      n[ren[rln=e[j]]]=tokens(program[rln][1],ren,rln)
+     n[65536]=program[65536],n[65537]=program[65537]
+     changeProgram(n)
+    }
+    if(f)throw 'Illegal data'
+   }else if(cmd==='|RESTORE'){
+    dai=0
+    if(isend(l,i))dal=0
+    else{
+     chtype(0,l[i])
+     if((dal=goto[l[i]])==null)throw 'Un def. line'
+     for(;!isend(l,i);)i++
+    }
+   }else if(cmd==='|TRON')
+    isend(l,i)?trf=1:(ch(l[i++]==='/'&&l[i++]==='P'),trf=0)
+   else if(cmd==='|TROFF')
+    trf=0
+   else if(cmd==='|CONT'){
+    if(!cont)throw "Can't CONT"
+    return cont='',[i,'CONT']
+   }else if(cmd==='|STOP'){
+    ln<65536?(cont='.',cpc=[pc,i],ed=ln):0
+    pc=65600,outln0('Break'+(ln<65536?' in '+ln:''))
+    i=l.length
+   }else if(cmd==='|REM');
+   else throw 'Syntax'
+   chend(l,i++)
+   return [i]
+  }
+}
+
+execLine=(i)=>{
+  for(var l=program[ln][0],e;i<l.length;){
+   e=execCmd(l[i++],l,i)
+   if(i=e[0],e[1])return e[1]
+  }
+}
+
+setinput=l=>{
+  var e,j,n,s
+  l=l.split(/("[^"]*|[^,]*)"?\s*,?\s*/)
+  for(j=1;inpvars.length;j+=2){
+   if((s=l[j])==null)return out('? '),1
+   n=inpvars.shift(),s[0]=='"'?s=s.slice(1):0
+   if(inpvars.shift())v[n]=s
+   else{
+    e=cvfloat(s)
+    if(/^ *E/.test(s)||!e[1])throw 'Illegal data'
+    v[n]=e[0]
+   }
+  }
+}
+run=(l,tok,brk)=>{
+  var e,i=0,j,l,s
+  fndef=null
+  if(ipc){
+   pc=ipc[0],i=ipc[1],j=ipc[2],ipc=null
+   if(brk){
+    ln<65536?cpc=[++pc,j]:0
+    throw 'Break'
+   }
+   if(setinput(l))return ipc=[pc,i,j],'INPUT'
+  }else{
+   err=''
+   program[65536]=[['|END']]
+   program[65537]=tok
+   if(!lines){
+    dal=dai=0
+    changeProgram(program)
+    lines=Object.keys(program)
+    goto=[0],lines.map((x,i)=>goto[x]=i)
+   }
+   pc=lines.length-1
+  }
+
+  for(l=lines.length;pc<l;){
+    ln=lines[pc++]
+    trf&&!i&&ln<65536?(s=`[${ln}]`,outcr(curx()+s.length>80),out(s)):0
+    if((e=execLine(i))=='NEXT')
+     pc=sp[sp.length-3]-1,i=sp[sp.length-2]
+    else if(e=='RETURN')
+     pc=sp[sp.length-3]-1,i=sp[sp.length-2],sp.length-=3
+    else if(e=='CONT')
+     pc=cpc[0]-1,i=cpc[1]
+    else
+     i=0
+  }
+  return e
+}
+reportError=(err,ln)=>
+ err?outln0(err+(err=='Break'?'':' error')+(ln<65536?' in '+ln:'')):0
+processEntry=(l,r,brk)=>{
+  var brk,c,err,m,t0
+  l=subschars(l.trim())
+  if(!ipc)m=l.match(/^([ \d]*\d)(.*)/)
+  r&&!brk&&outlnent(escchars(l))
+  if(m){
+    // editor
+    try{
+      cont='',dal=dai=0,sp=[]
+      n=fromasc(m[1])
+      if(n){
+       ed=n,lines=null
+       if(!m[2]) delete program[n]
+       else m=tokens(m[2]),program[n]=m
+       if(ast)ed+ast<65536?ed+=ast:(ast=0,outln0('Ready'))
+      }
+    }catch(e){
+     if(typeof e!='string')throw e
+     reportError(err=e,65536)
+     r&&outln0('Ready')
+    }
+  }else{
+    // immediate
+    try{
+      t0=new Date
+      if(ipc)c=run(l,0,brk)
+      else if(brk)ast=0,line.value=''
+      else if(!l)r=0
+      else ln=65536,m=tokens(l),c=run(l,m)
+    }catch(e){
+     if(typeof e!='string')throw e
+     ln>=65536?0:(ed=ln,cont=e=='Break'?'.':'')
+     reportError(err=e,ln)
+    }
+    if(c=='AUTO')r=0,outcr(curx())
+    else if(c=='EDIT'){
+     r=0,outcr(curx())
+     line.value=ed+' '+(program[ed]?program[ed][1]:'')
+    }else if(c=='LOAD'){
+     lds.style.display=ldtxt.style.display=''
+     outp.style.display='none'
+     line.disabled=send.disabled=1
+     ast=0
+     return
+    }else if(c=='INPUT'){
+     outp.textContent=outtxt+'\u25a1'
+     return
+    }
+    cont?0:sp=[]
+    r&&outln0('Ready'+cont)
+  }
+  return err
+}
+
+his=[]
+inpline=(l)=>{
+  if(!l)return
+  if (l=='\x1a') processEntry(l,1,1)
+  else his=[l,his[0],his[1]],processEntry(l,1)
+  ast&&!ipc?line.value=ed+' '+(program[ed]?program[ed][1]:''):0
+  outp.textContent=outtxt,outp.scrollTop=9e6
+}
+online=l=>{var t=l.value;l.form.reset(),inpline(t)}
+key=(k,l)=>{
+  k==19&&(ipc||ast)?inpline('\x1a'):
+  k==38&&his[0]?l.value=his.shift():0
+}
+drop=d=>{
+  d&&d.split('\n').map(x=>x.trim()).map(inpline)
+}
+onloadprg=_=>{
+  lds.style.display=ldtxt.style.display='none'
+  outp.style.display=''
+  line.disabled=send.disabled=0
+  ldtxt.value.split('\n').filter(x=>x.trim()).some(x=>processEntry(x,0))
+  outln0('Ready')
+  outp.textContent=outtxt,outp.scrollTop=9e6
+  line.focus()
+}
+</script>
