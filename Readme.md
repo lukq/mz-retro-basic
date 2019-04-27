@@ -1,4 +1,6 @@
-﻿A reimplementation of a BASIC language for the browser. It is an old-style BASIC
+Try it [online.](https://lukq.github.io/mz-retro-basic/mzbasic.htm)
+
+A reimplementation of a BASIC language for the browser. It is an old-style BASIC
 with line numbers and command-line input interface. The syntax is based on the
 version of BASIC shipped with Sharp MZ-800 computers.
 
