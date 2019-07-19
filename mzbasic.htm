@@ -1,14 +1,20 @@
 <!DOCTYPE html>
 <title>MZ Basic</title>
+
 <style>pre{font:14px/16px Courier New,monospace}
 </style>
 
-<textarea id=ldtxt style=display:none;height:348px;margin:0 cols=79>
+<span style='font:13px sans-serif'>Output type: </span><select id=outsel
+ onchange=drawOutput() style=margin-bottom:3pt>
+<option>Infinite
+<option>80x25
+</select><br>
+<textarea id=ldtxt style=display:none;height:368px;margin:0 cols=79>
 </textarea>
 <span id=lds style=display:none;height:27px><br>
 <button id=ldb style=margin-top:1px onclick=onloadprg()>Load</button>
 </span>
-<pre id=outp style='height:380px;overflow-y:scroll;margin:0'
+<pre id=outp style='height:400px;overflow-y:scroll;margin:0'
  ondragover="return!event.dataTransfer.types.includes('text/plain')"
  ondrop="inpline(event.dataTransfer.getData('text'))">
    MZ retro BASIC
@@ -28,8 +34,8 @@ Ready
 
 <script>
 /*
-MZ retro BASIC, version 1.1
-by Lukas Petru, June 2019
+MZ retro BASIC, version 1.2
+by Lukas Petru, July 2019
 
 Open source under the MIT License (Expat)
 
@@ -61,7 +67,7 @@ Special input:
 // Fix for 1Z-016, FN
 // 1IFPE.($8E2E)=$63PO.$8E2E,$66
 
-// (Apr2019) MS Edge sometimes rounds the last digit wrongly (e.g.
+// (July2019) MS Edge sometimes rounds the last digit wrongly (e.g.
 //  1.011E-6 to 1.010E-6), hopefully they fix it at some point.
 
 pstr=n=>{
@@ -95,15 +101,28 @@ pstr=n=>{
 }
 curx=_=>outtxt.length-1-outtxt.lastIndexOf('\n')
 out=e=>{
+ var a,i,j,s,t
  e=typeof e=='string'?
   e.replace(/[\0-\cL\cN-\x1b]/g,x=>'\x03\x1b'.includes(x)?'\r':'')
   .replace(/\r/g,'\n'):
   pstr(e)
+ if(!e)return
  outtxt+=e
+ e=outline[i=outline.length-1]+e
+ for(a=e.match(/.{1,80}|\n/g),j=0;s=a[j];j++)
+  s.length>79?(outline[i++]=s+'\n',t=''):s=='\n'?(outline[i++]=t+s,t=''):t=s
+ outline[i]=t,outline.splice(0,outline.length-25)
 }
-outcr=c=>{c?outtxt+='\n':0}
-outln0=s=>{outtxt+=(curx()?'\n'+s:s)+'\n'}
-outlnent=s=>{out(s+'\r')}
+outcr=c=>{
+ c?(outtxt+='\n',
+ outline[outline.length-1]+='\n',outline.push(''),
+ outline.splice(0,outline.length-25)):0
+}
+outln0=s=>{out((curx()?'\r'+s:s)+'\r')}
+
+cls=()=>outline=[outtxt='']
+cls()
+out(outp.textContent.replace(/\n/g,'\r'))
 
 keyword="^(?:\
 AUTO|AND|CONT|CHAIN|CLS|DELETE|DATA|DEF|DIM|EDIT|ELSE|END|FOR|GOTO|GOSUB|HSET|\
@@ -234,8 +253,6 @@ tokens=(s,ren,rln)=>{
   return[c,t]
 }
 
-outtxt=outp.textContent
-
 // Program, mapping of line number ->[tokens, text]
 program=[]
 // Pointer to currently executed line
@@ -244,13 +261,15 @@ pc=0
 ln=0
 // variables
 v={}
+va={}
 
 chFinite=a=>{if(!isFinite(a))throw 'Over flow'}
 cvfloat=s=>{
  var r,m=s.match(
   /^([ +-]*)(?:\$([\dA-F]*)|([ \d]*\.?[ \d]*)(?:(E[+-]?\d+)|E[+-])?) */)
  if(m[2]!=null){
-  if(r='0x'+m[2]|0,r>65535)throw 'Over flow'
+  if(r=+('0x'+m[2]),r>65535)throw 'Over flow'
+  r=(r+32768&65535)-32768
  }else{
   r=+(!m[3]||m[3]=='.'?0:m[3].replace(/ /g,'')+(m[4]||''))
   chFinite(r)
@@ -292,20 +311,24 @@ int=n=>{
 // 6-Memory capacity
 err=''
 
-fn={'|INT':Math.floor,'|ABS':Math.abs,'|SIN':Math.sin,'|COS':Math.cos,
-'|TAN':Math.tan,'|LN':x=>x<=0?err='Illegal data':Math.log(x),
-'|EXP':x=>(chFinite(x=Math.exp(x)),x),
+ch=a=>{if(!a)throw 'Syntax'}
+chnan=n=>{if(n!=n)throw 'Illegal data'}
+chnanov=n=>{if(n!=n)throw 'Over flow'}
+
+fn={'|INT':Math.floor,'|ABS':Math.abs,'|SIN':x=>(chnanov(x=Math.sin(x)),x),
+'|COS':x=>(chnanov(x=Math.cos(x)),x),'|TAN':x=>(chnanov(x=Math.tan(x)),x),
+'|LN':x=>x<=0?err='Illegal data':Math.log(x),'|EXP':Math.exp,
 '|SQR':x=>(x<0?err='Illegal data':Math.sqrt(x)),'|RND':Math.random,
 '|PEEK':x=>mm[int(x)]|0,'|ATN':Math.atan,'|SGN':Math.sign,
-'|LOG':x=>x<=0?err='Illegal data':Math.log10(x),'|FRAC':x=>x-Math.trunc(x),
-'|PAI':x=>(chFinite(x=x*Math.PI),x),'|RAD':x=>Math.PI/180*x,
+'|LOG':x=>x<=0?err='Illegal data':Math.log10(x),
+'|FRAC':x=>(chnanov(x=x-Math.trunc(x)),x),'|PAI':x=>x*Math.PI,
+'|RAD':x=>Math.PI/180*x,
 '|STR$':x=>(x=pstr(x))[0]==' '?x.slice(1):x,
 '|ASC':x=>x.charCodeAt(0)|0,'|HEX$':x=>int(x).toString(16).toUpperCase(),
 '|LEN':x=>x.length,'|SPC':x=>' '.repeat(byte(x)),
 '|SPACE$':x=>' '.repeat(byte(x)),'|VAL':x=>cvfloat(x)[0]}
 ft={'|ASC':1,'|LEN':1,'|VAL':1}
 
-ch=a=>{if(!a)throw 'Syntax'}
 isend=(l,i)=>i==l.length||l[i]===':'
 
 factor=(l,i)=>{
@@ -332,6 +355,7 @@ factor=(l,i)=>{
     ch(fndef[j-1]===')')
    }
    if(l[i]==='(')e=getarrvar(r,l,++i),r=e[0],i=e[1]
+   else va[r]=(va[r]|0)+1
    null!=(r=v[r])?0:r=(s[s.length-1]=='$'?'':0)
   }
   else if(r[0]=='"')r=r.slice(1,r[r.length-1]=='"'?-1:r.length)
@@ -339,7 +363,7 @@ factor=(l,i)=>{
   else if(r=='('){
     e=expr(l,i),i=e[1],r=e[0]
     ch(l[i++]===')')
-  }else if(r=='|'&&(f=fn[r=l[i++]])){
+  }else if(r=='|'&&(f=fn[r=l[i++]])||(f=fn[r])){
    if(l[i]==='('&&i++){
     e=expr(l,i),i=e[1]
     ch(l[i++]===')')
@@ -398,53 +422,46 @@ factor=(l,i)=>{
  ch(r!=null);return [r,i]
 }
 
-exprzw=(l,i)=>{
- var e,n,op,r;
- e=factor(l,i),r=e[0],i=e[1]
- while(typeof(op=l[i])=='string'&&op=='^'){
-  for(;l[++i]==='+';);
-  if(n=l[i]==='-')i++
-  e=factor(l,i)
-  chtype(0,r),chtype(0,e[0])
-  r=r**(n?-e[0]:e[0]),i=e[1]
-  if(r!=r)throw 'Illegal data'
-  chFinite(r)
- }
- return [r,i]
-}
-
 gcnt1=gcnt2=gcnt3=gcnt4=gcnt5=gcnt6=0
 
-prec={'<':1,'=':1,'>':1,'<=':1,'<>':1,'=>':1,
- '+':2,'-':2,'|div':3,'|MOD':3,'*':4,'/':4}
+precs={'<':1,'=':1,'>':1,'<=':1,'<>':1,'=>':1,
+ '+':2,'-':2,'|div':3,'|MOD':3,'*':4,'/':4,'^':5}
 
-expr4w=(l,i)=>{
- var a,c,e,o,op,p,r,s=[],t,not=typeof(op=l[i])=='string'&&op=='|NOT'&&++i
+expr4ws=(l,i)=>{
+ var a,c,e,o,op,p,r,s=[],sgn,t,not=typeof(op=l[i])=='string'&&op=='|NOT'&&++i
  out:for(;;){
   if(typeof(a=l[i])=='string'&&(c=a.charCodeAt(0))>=65&&c<=90
-   &&(typeof(op=l[i+1])!='string'||op!='('&&op!='^')&&!fndef&&v[a]!=null)
-   r=v[a],i++,gcnt6++
+   &&(typeof(op=l[i+1])!='string'||op!='(')&&!fndef&&v[a]!=null)
+   r=v[a],i++,sgn=0,gcnt6++,va[a]=(va[a]|0)+1
   else{
    while((t=typeof(a=l[i])=='string')&&a=='+')i++
-   t&&a=='-'?(e=exprzw(l,i+1),r=e[0],chtype(0,r),r=-r):(e=exprzw(l,i),r=e[0])
+   t&&a=='-'?(e=factor(l,i+1),r=e[0],chtype(0,r),r=-r,sgn=1):
+    (e=factor(l,i),r=e[0],sgn=0)
    i=e[1],gcnt4++
   }
 
-  p=typeof(op=l[i])=='string'?prec[op]||0:0
+  p=typeof(op=l[i])=='string'?precs[op]||0:0
   p?i++:0
   for(;s.length>2&&s[s.length-1]>=p;){
    a=s[s.length-3],o=s[s.length-2]
-   r=o=='+'?a+r:o=='-'?a-r:
-     o=='*'?a*r:o=='/'?a/r:
-     o=='|div'?Math.trunc(Math.trunc(a)/Math.trunc(r)):
-     o=='|MOD'?Math.trunc(a)%Math.trunc(r):
-     (o=='<'?a<r:o=='='?a==r:o=='>'?a>r:
-      o=='<='?a<=r:o=='<>'?a!=r:a>=r)?-1:0
+   o=='+'? typeof a=='number'?(chtype(0,r),chnanov(r=a+r)):
+    (chtype(1,r),(r=>{if(r.length>255)throw 'String length'})(r=a+r)):
+   o=='-'?(chtype(0,a),chtype(0,r),chnanov(r=a-r)):
+   o=='*'?(chtype(0,a),chtype(0,r),chnanov(r=a*r)):
+   o=='/'?(chtype(0,a),chtype(0,r),chnanov(r=a/r)):
+   o=='|div'?(chtype(0,a),chtype(0,r),
+    chnanov(r=Math.trunc(Math.trunc(a)/Math.trunc(r)))):
+   o=='|MOD'?(chtype(0,a),chtype(0,r),
+    chnanov(r=Math.trunc(a)%Math.trunc(r))):
+   o=='^'?(chtype(0,a),chtype(0,r),sgn=0,chnan(r=a**r)):
+   o=='-^'?(chtype(0,a),chtype(0,r),sgn=1,chnan(r=-((-a)**r))):
+    (chtype(typeof a=='string',r),r=(o=='<'?a<r:o=='='?a==r:o=='>'?a>r:
+      o=='<='?a<=r:o=='<>'?a!=r:a>=r)?-1:0)
    if(!p&&s.length<4)break out;
    s.length-=3
   }
   if(!p)break;
-  s.push(r,op,p)
+  s.push(r,p<5?op:sgn?'-^':op,p)
   gcnt5++
  }
  not?r=(int(r)^32767)-32768:0
@@ -453,10 +470,10 @@ expr4w=(l,i)=>{
 
 expr5w=(l,i)=>{
  var a,e,r,op
- e=expr4w(l,i),r=e[0],i=e[1]
+ e=expr4ws(l,i),r=e[0],i=e[1]
  while(typeof(op=l[i])=='string'&&op=='|AND'){
   a=r,i++
-  e=expr4w(l,i),r=e[0],i=e[1]
+  e=expr4ws(l,i),r=e[0],i=e[1]
   a=int(a),r=int(r)
   r=(((a&r)+32768)&65535)-32768
  }
@@ -515,6 +532,7 @@ getarrvar=(n,l,i)=>{
  var e=getarridx(l,i)
  if(!v[n+='('])throw 'Illegal data'
  charrdim(n,e[0])
+ va[n]=(va[n]|0)+1
  return [n+e[0],e[1]]
 }
 pad=(s,t)=>{var p;return s+' '.repeat((p=t.length-s.length)>0?p:0)}
@@ -533,6 +551,7 @@ sp=[]
 ed=10
 ast=0
 dal=dai=trf=0
+curch=''
 mm=[]
 chend=(l,i)=>{if(i<l.length&&l[i]!==':')throw 'Syntax'}
 
@@ -551,6 +570,7 @@ execCmd=(cmd,l,i)=>{
     n.length>1?t=n[n.length-1]=='$':t=0
     if(l[i]==='(')
      e=getarrvar(n,l,++i),n=e[0],i=e[1]
+    else va[n]=(va[n]|0)+1
     ch(l[i++]==='=')
     e=expr(l,i)
     chtype(t,e[0])
@@ -624,7 +644,7 @@ execCmd=(cmd,l,i)=>{
      sp.length=j-3
     }else if(cmd==='|RUN'){
      if(isend(l,i))
-      return clrflg(),ast=0,ed=10,v={},sp=[],pc=0,[l.length]
+      return clrflg(),ast=0,ed=10,v={},va={},sp=[],pc=0,[l.length]
     }
     ch(i<l.length&&typeof l[i]=='number')
     if((pc=goto[l[i]])==null)throw 'Un def. line'
@@ -704,8 +724,9 @@ execCmd=(cmd,l,i)=>{
     chend(l,i)
     if(!st)throw 'Illegal data'
     return ed=p,ast=st,[i,'AUTO']
-   }else if(cmd==='|'&&l[i]==='|CLR')i++,v={}
-   else if(cmd==='|CLS')chend(l,i),outtxt=''
+   }
+   else if(cmd==='|'&&l[i]==='|CLR')i++,v={},va={}
+   else if(cmd==='|CLS')chend(l,i),cls()
    else if(cmd==='|DATA')for(;!isend(l,i);)i++
    else if(cmd==='|DEF'){
     ch(l[i++]==='|FN')
@@ -946,6 +967,7 @@ processEntry=(l,r,brk)=>{
       // immediate
       t0=new Date
       gcnt1=gcnt2=gcnt3=gcnt4=gcnt5=gcnt6=0
+      curch=''
       if(ipc)c=run(l,0,brk)
       else if(brk)ast=0,line.value=''
       else if(!l)r=0
@@ -970,7 +992,7 @@ processEntry=(l,r,brk)=>{
      ast=0
      return
     }else if(c=='INPUT'){
-     outp.textContent=outtxt+'\u25a1'
+     curch='\u25a1'
      return
     }
     r&&outln0('Ready'+cont)
@@ -981,6 +1003,11 @@ processEntry=(l,r,brk)=>{
 }
 
 his=[]
+drawOutput=_=>{
+ var scr=1;
+ if(outsel.selectedIndex>0)outp.textContent=outline.join('')+curch
+ else outp.textContent=outtxt+curch,outp.scrollTop=9e6
+}
 inpline=(l)=>{
   var s=l.split('\n')
   tm.textContent='Busy'
@@ -989,12 +1016,12 @@ inpline=(l)=>{
     tm.textContent=''
     for(i=0;i<s.length;i++){
      if(s[i]=='\x1a') processEntry('',1,1)
-     else s[i]&&(his=[l=s[i].trim(),his[0],his[1]],outlnent(l),
+     else s[i]&&(his=[l=s[i].trim(),his[0],his[1]],out(l+'\r'),
       processEntry(l,1))
     }
     ast&&!ipc?line.value=ed+' '+(program[ed]?program[ed][1]:''):0
-    outp.textContent=outtxt,outp.scrollTop=9e6
-  })
+    drawOutput()
+  },16)
 }
 online=l=>{var t=l.value;l.form.reset(),inpline(t)}
 key=(k,l)=>{
@@ -1011,9 +1038,10 @@ onloadprg=_=>{
   outp.style.display=''
   line.disabled=send.disabled=0
   ldtxt.value.split('\n').map(x=>x.trim()).filter(x=>x).some(x=>processEntry(x,0))
-  outln0('Ready')
+  ipc?0:outln0('Ready')
   ldtxt.value=''
-  outp.textContent=outtxt,outp.scrollTop=9e6
+  drawOutput()
   line.focus()
 }
+getva=_=>Object.entries(va).join(' ')
 </script>
