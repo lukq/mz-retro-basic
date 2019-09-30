@@ -9,6 +9,7 @@
 <option>Infinite
 <option>80x25
 </select><br>
+
 <textarea id=ldtxt style=display:none;height:368px;margin:0 cols=79>
 </textarea>
 <span id=lds style=display:none;height:27px><br>
@@ -22,8 +23,6 @@
 Ready
 </pre>
 <form action="about:">
-  <!-- <input id=line size=80 onkeydown=key(event.keyCode,this)>
-  -->
   <textarea id=line rows=1 cols=80 onkeydown=key(event.keyCode,this)
    onpaste=paste(this)
   ></textarea><button id=send onclick=
@@ -34,8 +33,8 @@ Ready
 
 <script>
 /*
-MZ retro BASIC, version 1.2
-by Lukas Petru, July 2019
+MZ retro BASIC, version 1.3
+by Lukas Petru, September 2019
 
 Open source under the MIT License (Expat)
 
@@ -121,8 +120,7 @@ outcr=c=>{
 outln0=s=>{out((curx()?'\r'+s:s)+'\r')}
 
 cls=()=>outline=[outtxt='']
-cls()
-out(outp.textContent.replace(/\n/g,'\r'))
+
 
 keyword="^(?:\
 AUTO|AND|CONT|CHAIN|CLS|DELETE|DATA|DEF|DIM|EDIT|ELSE|END|FOR|GOTO|GOSUB|HSET|\
@@ -204,15 +202,15 @@ tokens=(s,ren,rln)=>{
     // relational operator
     m=s.slice(i).match(/=\s*[<>]?|<\s*[=>]?|>\s*[=<]?/)[0]
     r.push(m.replace(/ +/,'')),i+=m.length
-   }else if(s[i]=='"'){
+   }else if(s[i]==' ')r.push(' '),i++
+   else if(s[i]=='?')r.push('|PRINT'),i++
+   else if(s[i]=='"'){
     for(i++;s[i]&&s[i]!='"';)i++
     if(i-j>256)throw 'String length'
     s[i]=='"'?i++:0,r.push(s.slice(j,i))
-   }else if(s[i]==' ')r.push(' '),i++
-   else if(s[i]=='?')r.push('|PRINT'),i++
-   else if(s[i]==pich||s[i]=='\xf7'||s[i]=='\u23bd')r.push(s[i++])
-   else if(!/[\0-_]/.test(s[i]))throw 'Syntax'
-   else if(/[!-_]/.test(s[i])) r.push(l=s.slice(i,++i))
+   }else if(/[!-_\xf7\u03c0\u23bd]/.test(s[i]))
+    r.push(l=s[i++])
+   else if(!/[\0- ]/.test(s[i]))throw 'Syntax'
    else i++
    if(s[i]&&(l=="'"||l=="|REM"||l=="|DATA")){
     for(j=i,q=0;s[i]&&(s[i]!=':'||q);)s[i++]=='"'?q^=1:0
@@ -223,6 +221,7 @@ tokens=(s,ren,rln)=>{
    (x,i)=>typeof x=='number'?(x+'').toUpperCase():
     r[i-1]==='|DATA'||r[i-1]==='|REM'?x:
     x.replace(/^[|~]+/,'')).join('').replace(/\\/g,'\\\\')
+
   c=[]
   for(a=r.filter(x=>x!==' '),i=0;i<a.length;i++){
    x=a[i]
@@ -276,7 +275,6 @@ cvfloat=s=>{
  }
  return m[1].replace(/-/g,_=>r=-r),[r,m[0].length==s.length]
 }
-fromasc=s=>{if((s=+s.replace(/ /g,''))<65536)return s;throw 'Over flow'}
 isvar=s=>{
  var c;
  return typeof s=='string'&&(c=s.charCodeAt(0))>=65&&c<=90
@@ -302,6 +300,7 @@ int=n=>{
  if(n>=65536||n<=-65536)throw 'Over flow'
  return n&65535
 }
+fromasc=s=>{if((s=+s.replace(/ /g,''))<65536)return s;throw 'Over flow'}
 
 // 1-Syntax
 // 2-Over flow
@@ -314,16 +313,17 @@ err=''
 ch=a=>{if(!a)throw 'Syntax'}
 chnan=n=>{if(n!=n)throw 'Illegal data'}
 chnanov=n=>{if(n!=n)throw 'Over flow'}
+chnonz=n=>{if(!n)throw 'Illegal data'}
 
 fn={'|INT':Math.floor,'|ABS':Math.abs,'|SIN':x=>(chnanov(x=Math.sin(x)),x),
 '|COS':x=>(chnanov(x=Math.cos(x)),x),'|TAN':x=>(chnanov(x=Math.tan(x)),x),
-'|LN':x=>x<=0?err='Illegal data':Math.log(x),'|EXP':Math.exp,
+'|LN':x=>x<0?err='Illegal data':Math.log(x),'|EXP':Math.exp,
 '|SQR':x=>(x<0?err='Illegal data':Math.sqrt(x)),'|RND':Math.random,
 '|PEEK':x=>mm[int(x)]|0,'|ATN':Math.atan,'|SGN':Math.sign,
-'|LOG':x=>x<=0?err='Illegal data':Math.log10(x),
+'|LOG':x=>x<0?err='Illegal data':Math.log10(x),
 '|FRAC':x=>(chnanov(x=x-Math.trunc(x)),x),'|PAI':x=>x*Math.PI,
 '|RAD':x=>Math.PI/180*x,
-'|STR$':x=>(x=pstr(x))[0]==' '?x.slice(1):x,
+'|STR$':x=>(chFinite(x),x=pstr(x))[0]==' '?x.slice(1):x,
 '|ASC':x=>x.charCodeAt(0)|0,'|HEX$':x=>int(x).toString(16).toUpperCase(),
 '|LEN':x=>x.length,'|SPC':x=>' '.repeat(byte(x)),
 '|SPACE$':x=>' '.repeat(byte(x)),'|VAL':x=>cvfloat(x)[0]}
@@ -428,7 +428,7 @@ precs={'<':1,'=':1,'>':1,'<=':1,'<>':1,'=>':1,
  '+':2,'-':2,'|div':3,'|MOD':3,'*':4,'/':4,'^':5}
 
 expr4ws=(l,i)=>{
- var a,c,e,o,op,p,r,s=[],sgn,t,not=typeof(op=l[i])=='string'&&op=='|NOT'&&++i
+ var a,c,e,o,op,p,r,s=[],sgn,t,u,not=typeof(op=l[i])=='string'&&op=='|NOT'&&++i
  out:for(;;){
   if(typeof(a=l[i])=='string'&&(c=a.charCodeAt(0))>=65&&c<=90
    &&(typeof(op=l[i+1])!='string'||op!='(')&&!fndef&&v[a]!=null)
@@ -453,10 +453,12 @@ expr4ws=(l,i)=>{
     chnanov(r=Math.trunc(Math.trunc(a)/Math.trunc(r)))):
    o=='|MOD'?(chtype(0,a),chtype(0,r),
     chnanov(r=Math.trunc(a)%Math.trunc(r))):
-   o=='^'?(chtype(0,a),chtype(0,r),sgn=0,chnan(r=a**r)):
-   o=='-^'?(chtype(0,a),chtype(0,r),sgn=1,chnan(r=-((-a)**r))):
-    (chtype(typeof a=='string',r),r=(o=='<'?a<r:o=='='?a==r:o=='>'?a>r:
-      o=='<='?a<=r:o=='<>'?a!=r:a>=r)?-1:0)
+   o=='^'?(chtype(0,a),chtype(0,r),sgn=0,u=a**r,
+    r=u==u?u:(chFinite(r),chnan(u))):
+   o=='-^'?(chtype(0,a),chtype(0,r),sgn=1,u=(-a)**r,
+    r=u==u?-u:(chFinite(r),chnan(u))):
+   (chtype(typeof a=='string',r),
+    r=(o=='<'?a<r:o=='='?a==r:o=='>'?a>r:o=='<='?a<=r:o=='<>'?a!=r:a>=r)?-1:0)
    if(!p&&s.length<4)break out;
    s.length-=3
   }
@@ -739,7 +741,7 @@ execCmd=(cmd,l,i)=>{
     ch(!isend(l,i)&&l[i]!==',')
     e=getsted(l,i),st=e[0],to=e[1]
     Object.keys(program).map(b=>b>=st&&b<=to?delete program[b]:0)
-    clrflg(),pc=65600,i=l.length
+    clrflg(),lines=null,pc=65600,i=l.length
    }
    else if(cmd==='|DIM'){
     do{
@@ -834,12 +836,13 @@ execCmd=(cmd,l,i)=>{
    }
 
    else if(cmd==='|RENUM'){
+    // tokenized as line numbers but parsed as expressions
     if(ln<65536)throw 'Instruction'
     p=0,w=st=10
-    isend(l,i)?0:l[i]===','?0:(e=expr(l,i),i=e[1],w=int(e[0]))
+    isend(l,i)?0:l[i]===','?0:(e=expr(l,i),i=e[1],chnonz(w=int(e[0])))
     isend(l,i)?0:(ch(l[i++]===','),l[i]===',')?0:
-     (e=expr(l,i),i=e[1],p=int(e[0]))
-    isend(l,i)?0:(ch(l[i++]===','),e=expr(l,i),i=e[1],st=int(e[0]))
+     (e=expr(l,i),i=e[1],chnonz(p=int(e[0])))
+    isend(l,i)?0:(ch(l[i++]===','),e=expr(l,i),i=e[1],chnonz(st=int(e[0])))
     if(w<p)throw 'Illegal data'
     e=Object.keys(program);
     for(ren=[0],q=w-st,j=0;j<e.length-2;j++)ren[rln=e[j]]=(rln<p?rln:q+=st)
@@ -869,9 +872,7 @@ execCmd=(cmd,l,i)=>{
     if(!cont)throw "Can't CONT"
     return cont='',[i,'CONT']
    }else if(cmd==='|STOP'){
-    ln<65536?(cont='.',cpc=[pc,i],ed=ln):0
-    pc=65600,outln0('Break'+(ln<65536?' in '+ln:''))
-    i=l.length
+    ln<65536?cpc=[pc,i]:0; throw 'Break'
    }else if(cmd==='|REM');
    else throw 'Syntax'
    chend(l,i++)
@@ -901,8 +902,8 @@ setinput=l=>{
    }
   }
 }
-run=(l,tok,brk)=>{
-  var e,i=0,j,l,s
+run=(l,brk)=>{
+  var e,i=0,j,s
   fndef=null
   if(ipc){
    pc=ipc[0],i=ipc[1],j=ipc[2],ipc=null
@@ -914,13 +915,8 @@ run=(l,tok,brk)=>{
   }else{
    err=''
    program[65536]=[['|END']]
-   program[65537]=tok
-   if(!lines){
-    dal=dai=0
-    setnewprogram(program)
-    lines=Object.keys(program)
-    goto=[0],lines.map((x,i)=>goto[x]=i)
-   }
+   if(!lines)
+    dal=dai=0,setnewprogram(program)
    pc=lines.length-1
   }
 
@@ -940,7 +936,11 @@ run=(l,tok,brk)=>{
 }
 reportError=(err,ln)=>
   outln0(err+(err=='Break'?'':' error')+(ln<65536?' in '+ln:''))
+
+setcodeline=(n,c)=>program[n]=tokens(c)
+
 processEntry=(l,r,brk)=>{
+  // r - print Ready when done (standard), suppressed for LOAD
   var c,err,m,n,t0
   l=subschars(l)
   if(!ipc)m=l.match(/^([ \d]*\d)(.*)/)
@@ -952,7 +952,7 @@ processEntry=(l,r,brk)=>{
       if(n){
        ed=n,lines=null
        if(!m[2]) delete program[n]
-       else m=tokens(m[2]),program[n]=m
+       else setcodeline(n,m[2])
        if(ast)ed+ast<65536?ed+=ast:(ast=0,outln0('Ready'))
       }
     }catch(e){
@@ -968,17 +968,17 @@ processEntry=(l,r,brk)=>{
       t0=new Date
       gcnt1=gcnt2=gcnt3=gcnt4=gcnt5=gcnt6=0
       curch=''
-      if(ipc)c=run(l,0,brk)
+      if(ipc)c=run(l,brk)
       else if(brk)ast=0,line.value=''
       else if(!l)r=0
-      else ln=65536,m=tokens(l),c=run(l,m)
+      else setcodeline(ln=65537,l),c=run()
       //tm.textContent=new Date-t0+'; '+[gcnt1,gcnt2,gcnt3,gcnt4,gcnt5,gcnt6]+
       //` ~${(gcnt1*5e-7-gcnt2*.01e-3+gcnt4*1.073e-3+gcnt5*1.51e-3+gcnt6*.882e-3)
       //.toPrecision(2)} s @Z80`
     }catch(e){
-     if(typeof e!='string')throw e
+     if(typeof e!='string')throw alert(e),e
      // ERRORA
-     ln>=65536?0:(ed=ln,cont=e=='Break'?'.':'')
+     ln<65536?(ed=ln,cont=e=='Break'?'.':''):0
      reportError(err=e,ln)
     }
     if(c=='AUTO')r=0,outcr(curx())
@@ -1001,6 +1001,9 @@ processEntry=(l,r,brk)=>{
   }
   return err
 }
+
+cls()
+out(outp.textContent.replace(/\n/g,'\r'))
 
 his=[]
 drawOutput=_=>{
@@ -1026,7 +1029,7 @@ inpline=(l)=>{
 online=l=>{var t=l.value;l.form.reset(),inpline(t)}
 key=(k,l)=>{
   k==13?(event.preventDefault(),online(l)):
-  k==19&&(ipc||ast)?inpline('\x1a'):
+  k==19&&(ipc||ast)?inpline('\x1a'):  // Break
   k==33&&his[0]?l.value=his.shift():0  // PgUp
 }
 paste=l=>{
