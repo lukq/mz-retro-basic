@@ -33,8 +33,8 @@ Ready
 
 <script>
 /*
-MZ retro BASIC, version 1.3
-by Lukas Petru, September 2019
+MZ retro BASIC, version 1.4
+by Lukas Petru, October 2019
 
 Open source under the MIT License (Expat)
 
@@ -44,8 +44,8 @@ version of BASIC shipped with Sharp MZ-800 computers.
 
 Supported commands:
  AUTO AND CONT CLS CLR DELETE DATA DEF DIM EDIT ELSE END FOR FN GOTO GOSUB INPUT
- IF LIST LET LOAD MOD NEXT NEW NOT ON OR POKE PRINT RUN RETURN READ REM RENUM
- RESTORE STOP STEP TAB THEN TO TRON TROFF USING XOR
+ IF LIST LABEL LET LOAD MOD NEXT NEW NOT ON OR POKE PRINT RUN RETURN READ REM
+ RENUM RESTORE STOP STEP TAB THEN TO TRON TROFF USING XOR
 
 Functions:
  ABS ASC ATN CHR$ COS EXP FRAC HEX$ INT LEFT$ LEN LN LOG MID$ PAI PEEK RAD
@@ -98,17 +98,18 @@ pstr=n=>{
    s=((s=a+'').length<13?s:a.toExponential(7)).toUpperCase()
  return (n<0?'-':' ')+s
 }
+
 curx=_=>outtxt.length-1-outtxt.lastIndexOf('\n')
 out=e=>{
- var a,i,j,s,t
+ var a,i,j,r,s,t
  e=typeof e=='string'?
   e.replace(/[\0-\cL\cN-\x1b]/g,x=>'\x03\x1b'.includes(x)?'\r':'')
   .replace(/\r/g,'\n'):
   pstr(e)
  if(!e)return
- outtxt+=e
- e=outline[i=outline.length-1]+e
- for(a=e.match(/.{1,80}|\n/g),j=0;s=a[j];j++)
+ r=outline[i=outline.length-1]+e
+ if(outscr)outtxt=r;else outtxt+=e
+ for(a=r.match(/.{1,80}|\n/g),j=0;s=a[j];j++)
   s.length>79?(outline[i++]=s+'\n',t=''):s=='\n'?(outline[i++]=t+s,t=''):t=s
  outline[i]=t,outline.splice(0,outline.length-25)
 }
@@ -119,19 +120,17 @@ outcr=c=>{
 }
 outln0=s=>{out((curx()?'\r'+s:s)+'\r')}
 
-cls=()=>outline=[outtxt='']
-
 
 keyword="^(?:\
 AUTO|AND|CONT|CHAIN|CLS|DELETE|DATA|DEF|DIM|EDIT|ELSE|END|FOR|GOTO|GOSUB|HSET|\
-INPUT|IF|LIST|LET|LOAD|MERGE|MOD|NEXT|NEW|NOISE|NOT|ON|OR|PRINT|POKE|RUN|\
+INPUT|IF|LIST|LABEL|LET|LOAD|MERGE|MOD|NEXT|NEW|NOISE|NOT|ON|OR|PRINT|POKE|RUN|\
 RETURN|READ|REM|RENUM|RESTORE|RESUME|STOP|STEP|SPC|TRON|TAB|THEN|TO|TROFF|USR|\
 USING|VERIFY|XOPEN|XOR|"
-keyword2="ABS|ASC|ATN|CHR$|CLR|COS|EXP|FN|FRAC|HEX$|INT|LEFT$|LEN|LN|LOG|MID$|\
-PAI|PEEK|RAD|RIGHT$|RND|SGN|SIN|SPACE$|SQR|STR$|TAN|VAL"
+keyword2="ABS|ASC|ATN|CHR$|CLR|COS|CSRH|CSRV|EXP|FN|FRAC|HEX$|INT|LEFT$|LEN|LN|\
+LOG|MID$|PAI|PEEK|RAD|RIGHT$|RND|SGN|SIN|SPACE$|SQR|STR$|TAN|VAL"
 
 keywordr=RegExp((keyword+keyword2).replace(/\$/g,' *\\$')
- +"|[AC-IL-PR-VX](?:[ABDEG-ILN-UX][AC-IKLN-PR-UX]*)? *\\.)")
+ +"|[AC-IL-PR-VX](?:[ABDEG-ILN-UX][A-IKLN-PR-UX]*)? *\\.)")
 
 findKeyword=(s,i)=>{
  var k,m,r
@@ -140,6 +139,7 @@ findKeyword=(s,i)=>{
   (m=(keyword+keyword2).match(RegExp(
    `\\b${k[0].slice(0,-1).replace(/ +/,'\\$')}[\\w$]*`)))
   &&m[0]
+ // operators cannot be abbreviated
  return !r?0:['AND','MOD','NOT','OR','XOR'].includes(r)&&
   (/[A-Z_\d]/.test(s[i-1]||0)||m)?0:[r,keyword2.includes(r),k[0]]
 }
@@ -162,10 +162,10 @@ tokens=(s,ren,rln)=>{
     // keyword or variable
     for(m=0;/[A-Z_\d]/.test(s[i])&&!(m=findKeyword(s,i));)i++
     s[i]=='$'?i++:0,s[i]=='('?i++:0
-    if(i>j) r.push(s.slice(j,i))
+    i>j?r.push(s.slice(j,i)):0
     if(m){
-     m[1]?r.push('|'):0
-     l='|'+m[0],r.push(l)
+     m[1]&&r.push('|')
+     r.push(l='|'+m[0])
      i+=m[2].length
     }
     if(m&&lnoCmds.includes(m[0])){
@@ -253,7 +253,7 @@ tokens=(s,ren,rln)=>{
 }
 
 // Program, mapping of line number ->[tokens, text]
-program=[]
+program={}
 // Pointer to currently executed line
 pc=0
 // Currently executed line number
@@ -321,7 +321,7 @@ fn={'|INT':Math.floor,'|ABS':Math.abs,'|SIN':x=>(chnanov(x=Math.sin(x)),x),
 '|SQR':x=>(x<0?err='Illegal data':Math.sqrt(x)),'|RND':Math.random,
 '|PEEK':x=>mm[int(x)]|0,'|ATN':Math.atan,'|SGN':Math.sign,
 '|LOG':x=>x<0?err='Illegal data':Math.log10(x),
-'|FRAC':x=>(chnanov(x=x-Math.trunc(x)),x),'|PAI':x=>x*Math.PI,
+'|FRAC':x=>(chnanov(x%=1),x),'|PAI':x=>x*Math.PI,
 '|RAD':x=>Math.PI/180*x,
 '|STR$':x=>(chFinite(x),x=pstr(x))[0]==' '?x.slice(1):x,
 '|ASC':x=>x.charCodeAt(0)|0,'|HEX$':x=>int(x).toString(16).toUpperCase(),
@@ -363,7 +363,7 @@ factor=(l,i)=>{
   else if(r=='('){
     e=expr(l,i),i=e[1],r=e[0]
     ch(l[i++]===')')
-  }else if(r=='|'&&(f=fn[r=l[i++]])||(f=fn[r])){
+  }else if(r=='|'&&(f=fn[r=l[i++]])||r=='|SPC'&&(f=fn[r])){
    if(l[i]==='('&&i++){
     e=expr(l,i),i=e[1]
     ch(l[i++]===')')
@@ -416,7 +416,9 @@ factor=(l,i)=>{
    for(;k;i++)
     ch(!isend(l,i)),
     typeof l[i]=='string'&&(l[i]==')'?k--:l[i]=='('?k++:0)
-  }else ch(0)
+  }else if(r=='|CSRH')r=0
+  else if(r=='|CSRV')r=24
+  else ch(0)
   return [r,i]
  }
  ch(r!=null);return [r,i]
@@ -546,6 +548,7 @@ getsted=(l,i)=>{
   l[i]!=='|-'?n:typeof l[++i]=='number'?l[i++]:l[i]==='.'?(i++,ed):
   (ch(isend(l,i)||l[i]===','),65535),i]
 }
+
 lines=goto=null
 ipc=null
 cont=''
@@ -555,13 +558,30 @@ ast=0
 dal=dai=trf=0
 curch=''
 mm=[]
-chend=(l,i)=>{if(i<l.length&&l[i]!==':')throw 'Syntax'}
+outscr=0
 
+cls=()=>outline=[outtxt='']
+
+getstring=s=>s.slice(1,s[s.length-1]=='"'?-1:s.length)
+chend=(l,i)=>{if(i<l.length&&l[i]!==':')throw 'Syntax'}
 clrflg=_=>{dal=dai=0,cont=''}
 setnewprogram=p=>{
   program=p
   lines=Object.keys(program),goto=[0],lines.map((x,i)=>goto[x]=i)
 }
+getlineidx=n=>{
+ var i
+ if(typeof n=='number')i=goto[n]
+ else{
+  ch(n=n[0]=='"'&&getstring(n))
+  i=lines.findIndex(
+   (x,y)=>(y=program[x][0])[0]==='|LABEL'&&typeof y[1]=='string'&&
+    y[1][0]=='"'&&n==getstring(y[1]))
+  i>=0&&i<lines.length-1?0:i=null
+ }
+ if(i==null)throw 'Un def. line'; return i
+}
+
 execCmd=(cmd,l,i)=>{
   var e,f=0,j,n,p,q=0,rln,s,st,t,to,u,ui,w
 
@@ -618,40 +638,37 @@ execCmd=(cmd,l,i)=>{
    else if(cmd==='|IF'){
     e=expr(l,i),i=e[1]
     if(e[0]){
-     if(l[i]==='|THEN'&&++i<l.length&&typeof l[i]=='number'){
-      if(cont='',(pc=goto[l[i]])==null)throw 'Un def. line'
-      i=l.length
+     if(l[i]==='|THEN'&&++i<l.length&&(typeof l[i]=='number'||l[i][0]=='"')){
+      cmd='|GOTO';continue on
      }
     }else{
      for(q=1;i<l.length&&q;i++)
       l[i]==='|ELSE'?q--:l[i]==='|IF'?q++:0
-     if(i<l.length&&typeof l[i]=='number'){
-      if(cont='',(pc=goto[l[i]])==null)throw 'Un def. line'
-      i=l.length
+     if(i<l.length&&(typeof l[i]=='number'||l[i][0]=='"')){
+      cmd='|GOTO';continue on
      }
     }
     return [i]
    }
 
    else if(cmd==='|GOTO'||cmd==='|GOSUB'||cmd==='|RETURN'||cmd==='|RUN'){
-    if(cmd==='|GOSUB'){
+    if(cmd=='|GOSUB'){
      for(j=i;j<l.length&&l[j++]!==':';);
      sp.push(pc,j,2)
      if(sp.length>8400)throw sp.length=0,'Memory capacity'
-    }else if(cmd==='|RETURN'){
+    }else if(cmd=='|RETURN'){
      for(j=sp.length;sp[j-1]==0;)j-=6
      sp.length=j
      if(sp[j-1]!=2)throw 'RETURN'
      if(isend(l,i))return [i,'RETURN']
      sp.length=j-3
-    }else if(cmd==='|RUN'){
+    }else if(cmd=='|RUN'){
      if(isend(l,i))
       return clrflg(),ast=0,ed=10,v={},va={},sp=[],pc=0,[l.length]
     }
-    ch(i<l.length&&typeof l[i]=='number')
-    if((pc=goto[l[i]])==null)throw 'Un def. line'
-    cont=''
-    i=l.length
+    ch(i<l.length&&(typeof (p=l[i])=='number'||cmd!='|RUN'))
+    pc=getlineidx(p)
+    cont='',i=l.length
    }
 
    else if(cmd==='|PRINT'){
@@ -668,8 +685,8 @@ execCmd=(cmd,l,i)=>{
        ch(l[++i]==='(')
        e=expr(l,i+1),i=e[1]
        n=byte(e[0])
-       ch(l[i++]===')')
-       (n=n-curx())>0?out(' '.repeat(n)):0,q=1
+       ch(l[i++]===')'),q=1
+       if((n=n-curx()%80)>0)out(' '.repeat(n))
      }else if(l[i]==='|USING'){
        e=expr(l,i+1),i=e[1]
        chtype(1,e[0])
@@ -729,7 +746,7 @@ execCmd=(cmd,l,i)=>{
    }
    else if(cmd==='|'&&l[i]==='|CLR')i++,v={},va={}
    else if(cmd==='|CLS')chend(l,i),cls()
-   else if(cmd==='|DATA')for(;!isend(l,i);)i++
+   else if(cmd==='|DATA'||cmd==='|LABEL')for(;!isend(l,i);)i++
    else if(cmd==='|DEF'){
     ch(l[i++]==='|FN')
     ch(isvar(n=l[i++]))
@@ -784,7 +801,7 @@ execCmd=(cmd,l,i)=>{
     return pc=65600,[i,'LOAD']
 
    }else if(cmd==='|NEW'){
-    clrflg(),ast=0,ed=10,program=[],lines=null,v={},pc=65600,i=l.length
+    clrflg(),ast=0,ed=10,program={},lines=null,v={},pc=65600,i=l.length
 
    }else if(cmd==='|ON'){
     e=expr(l,i),i=e[1]
@@ -794,10 +811,10 @@ execCmd=(cmd,l,i)=>{
     if(p&&p<256){
      do{
       if(!--p){ch(cmd!=':'),cmd=='|RUN'?i=l.length:0;continue on}
-      ch(typeof l[i++]=='number')
-     }while(l[i]===','&&i++)
+      ch(typeof l[i]=='number'||l[i][0]=='"')
+     }while(l[++i]===','&&i++)
     }else
-     for(q=0;l[i]!=null&&(l[i]!==':'||q);)l[i++]==='"'?q=1-q:0
+     for(q=0;l[i]!=null&&(l[i]!==':'||q);)l[i++]==='"'?q^=1:0
 
    }else if(cmd==='|POKE'){
     e=expr(l,i),i=e[1]
@@ -859,11 +876,8 @@ execCmd=(cmd,l,i)=>{
    }else if(cmd==='|RESTORE'){
     dai=0
     if(isend(l,i))dal=0
-    else{
-     chtype(0,l[i])
-     if((dal=goto[l[i]])==null)throw 'Un def. line'
-     for(;!isend(l,i);)i++
-    }
+    else
+     for(dal=getlineidx(l[i]);!isend(l,i);)i++
    }else if(cmd==='|TRON')
     isend(l,i)?trf=1:(ch(l[i++]==='/'&&l[i++]==='P'),trf=0)
    else if(cmd==='|TROFF')
@@ -1007,8 +1021,8 @@ out(outp.textContent.replace(/\n/g,'\r'))
 
 his=[]
 drawOutput=_=>{
- var scr=1;
- if(outsel.selectedIndex>0)outp.textContent=outline.join('')+curch
+ outscr=outsel.selectedIndex>0
+ if(outscr)outp.textContent=outline.join('')+curch
  else outp.textContent=outtxt+curch,outp.scrollTop=9e6
 }
 inpline=(l)=>{
